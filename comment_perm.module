@@ -1,0 +1,183 @@
+<?php
+// $Id: 
+
+/**
+ * Implementation of hook_menu().
+ */
+function comment_perm_menu($may_cache) {
+  $items = array();
+  
+  if ($may_cache) {
+    $items[] = array(
+      'path' => 'admin/content/comment_perm',
+      'title' => t('Comment permissions'),
+      'description' => t('Setup comment permissions by user role and by node type.'),
+      'callback' => 'drupal_get_form',
+      'callback arguments' => 'comment_perm_admin_settings',
+      'access' => user_access('administer site configuration'),
+      'type' => MENU_NORMAL_ITEM
+    );
+  }
+  return $items;
+}
+
+/**
+ * Menu callback; presents the comment_perm settings page.
+ */
+function comment_perm_admin_settings() {
+  $form = array();
+  $form['help'] = array(
+    '#value' => t("<p>Enable the extended comment permissions for certain content types here.
+      Then go to the !user-access-control to configure which roles can post comments for the
+      these content types.</p>",
+      array('!user-access-control' => l('user access control', 'admin/user/access')))
+  );
+  
+  // get node types
+  $node_types = node_get_types();
+  foreach ($node_types as $type => $obj) {
+    switch (variable_get('comment_' . $type, 0)) {
+      case 1:
+        $status = '<em> (comments are currently read only)</em>';
+        break;
+      case 2:
+        $status = '';
+        break;  
+      default: // case 0
+        $status = '<em>  (comments are currently disabled)</em>';
+        break;
+    }
+    $types[$type] = $obj->name . $status; 
+  }
+  $form['comment_perm_node_types'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Enable comment permissions by role for these content types'),
+    '#default_value' => variable_get('comment_perm_node_types', ''),
+    '#options' => $types
+  );
+  
+  $form['comment_perm_message_anon'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Commenting denied message for anonymous users'),
+    '#default_value' => variable_get('comment_perm_message_anon', 'Login or register to post comments!'),
+    '#description' => t('Ideally commentting will be invisible to those without permission to post, but
+                         just in case you can specify the message they will see.')
+  );
+  
+  $form['comment_perm_message_reg'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Commenting denied message for registered users'),
+    '#default_value' => variable_get('comment_perm_message_reg', "We're sorry, but you can't post comments here!"),
+    '#description' => t('Ideally commentting will be invisible to those without permission to post, but
+                         just in case you can specify the message they will see.')
+  );
+  
+  return system_settings_form($form);
+}
+
+/**
+ * Implementation of hook_perm().
+ */
+function comment_perm_perm() {
+  $perms = array();
+  $types = variable_get('comment_perm_node_types', '');
+  if (is_array($types)) {
+    foreach ($types as $type) {
+      if ($type) {
+        $perms[] = 'comment on ' . $type . ' content';
+      }
+    }
+  }
+  return $perms;
+}
+
+/**
+ * Implementation of hook_comment().
+ */
+function comment_perm_comment($a1, $op) {
+  switch ($op) {
+    case 'validate':
+      $nid = $a1['nid'];
+      if (!comment_perm_access($nid)) {
+        form_set_error('', _comment_perm_access_denied_message());
+      }
+      break;
+  }
+}
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function comment_perm_form_alter($form_id, &$form) {
+  if ($form_id == 'comment_form') {
+    $nid = $form['nid']['#value'];
+    if (!comment_perm_access($nid)) {
+      // for comment reply pages, redirect back to the node
+      if (arg(0) == 'comment' && arg(1) == 'reply' && is_numeric(arg(2))) {
+        drupal_set_message(_comment_perm_access_denied_message(), 'error');
+        drupal_goto('node/' . arg(2));
+      } else {
+        // for inline comment forms, such remove their fields so nothing will show
+        unset($form['comment_filter']);
+        foreach ($form as $key => $item) {
+          if ($type = $item['#type']) {
+            switch ($type) {
+              case 'value':
+              case 'hidden':
+                // keep these
+                break;
+              default:
+                // remove all others
+                unset($form[$key]);
+                break;
+            }
+          }
+        }
+        
+        // display a message to users who can't post comments
+        $form['text'] = array(
+          '#value' => '<p id="comment-perm-access-denied">' . _comment_perm_access_denied_message() . '</p>'
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Implementation of hook_link_alter().
+ */
+function comment_perm_link_alter(&$node, &$links) {
+  if (!comment_perm_access($node)) {
+    unset($links['comment_add']);
+  }
+}
+
+/**
+ * Can the current user add comments to a given node?
+ */
+function comment_perm_access($node) {
+  if (is_numeric($node)) {
+    $node = node_load($node);
+  }
+  
+  // get node types managed by comment_perm
+  $types = variable_get('comment_perm_node_types', '');
+  if (is_array($types)) {
+    if (in_array($node->type, $types)) {
+      if (!user_access('comment on ' . $node->type . ' content')) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function _comment_perm_access_denied_message() {
+  global $user;
+  
+  if ($user->uid == 0) {
+    return variable_get('comment_perm_message_anon', 'Login or register to post comments!');
+  } else {
+    return variable_get('comment_perm_message_reg', "We're sorry, but you can't post comments here!");
+  }
+}
