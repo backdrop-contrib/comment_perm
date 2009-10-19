@@ -1,90 +1,44 @@
 <?php
-// $Id: 
+// $Id$
+
+/**
+ * @file
+ * Module to control commenting permissions by role and by node type.
+ */
 
 /**
  * Implementation of hook_menu().
  */
-function comment_perm_menu($may_cache) {
+function comment_perm_menu() {
   $items = array();
-  
-  if ($may_cache) {
-    $items[] = array(
-      'path' => 'admin/content/comment_perm',
-      'title' => t('Comment permissions'),
-      'description' => t('Setup comment permissions by user role and by node type.'),
-      'callback' => 'drupal_get_form',
-      'callback arguments' => 'comment_perm_admin_settings',
-      'access' => user_access('administer site configuration'),
-      'type' => MENU_NORMAL_ITEM
-    );
-  }
+
+  $items['admin/content/comment_perm'] = array(
+    'title' => 'Comment permissions',
+    'description' => 'Setup comment permissions by user role and by node type.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('comment_perm_admin_settings'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'comment_perm.admin.inc',
+  );
+
   return $items;
 }
 
-/**
- * Menu callback; presents the comment_perm settings page.
- */
-function comment_perm_admin_settings() {
-  $form = array();
-  $form['help'] = array(
-    '#value' => t("<p>Enable the extended comment permissions for certain content types here.
-      Then go to the !user-access-control to configure which roles can post comments for the
-      these content types.</p>",
-      array('!user-access-control' => l('user access control', 'admin/user/access')))
-  );
-  
-  // get node types
-  $node_types = node_get_types();
-  foreach ($node_types as $type => $obj) {
-    switch (variable_get('comment_' . $type, 0)) {
-      case 1:
-        $status = '<em> (comments are currently read only)</em>';
-        break;
-      case 2:
-        $status = '';
-        break;  
-      default: // case 0
-        $status = '<em>  (comments are currently disabled)</em>';
-        break;
-    }
-    $types[$type] = $obj->name . $status; 
-  }
-  $form['comment_perm_node_types'] = array(
-    '#type' => 'checkboxes',
-    '#title' => t('Enable comment permissions by role for these content types'),
-    '#default_value' => variable_get('comment_perm_node_types', ''),
-    '#options' => $types
-  );
-  
-  $form['comment_perm_message_anon'] = array(
-    '#type' => 'textfield',
-    '#title' => t('Commenting denied message for anonymous users'),
-    '#default_value' => variable_get('comment_perm_message_anon', 'Login or register to post comments!'),
-    '#description' => t('Ideally commentting will be invisible to those without permission to post, but
-                         just in case you can specify the message they will see.')
-  );
-  
-  $form['comment_perm_message_reg'] = array(
-    '#type' => 'textfield',
-    '#title' => t('Commenting denied message for registered users'),
-    '#default_value' => variable_get('comment_perm_message_reg', "We're sorry, but you can't post comments here!"),
-    '#description' => t('Ideally commentting will be invisible to those without permission to post, but
-                         just in case you can specify the message they will see.')
-  );
-  
-  return system_settings_form($form);
-}
 
 /**
  * Implementation of hook_perm().
  */
 function comment_perm_perm() {
   $perms = array();
-  $types = variable_get('comment_perm_node_types', '');
+  $types = variable_get('comment_perm_node_types', array());
   if (is_array($types)) {
     foreach ($types as $type) {
       if ($type) {
-        $perms[] = 'comment on ' . $type . ' content';
+        $perms[] = $type .': comment on any '. $type .' content';
+        $perms[] = $type .': comment without approval on any '. $type .' content';
+        $perms[] = $type .': comment without approval on own '. $type .' content';
+        $perms[] = $type .': edit own comments on '. $type .' content';
       }
     }
   }
@@ -94,12 +48,20 @@ function comment_perm_perm() {
 /**
  * Implementation of hook_comment().
  */
-function comment_perm_comment($a1, $op) {
+function comment_perm_comment(&$comment, $op) {
   switch ($op) {
     case 'validate':
-      $nid = $a1['nid'];
+      $nid = $comment['nid'];
       if (!comment_perm_access($nid)) {
         form_set_error('', _comment_perm_access_denied_message());
+      }
+      break;
+    case 'insert':
+      $current_status = $comment['status'];
+      $desired_status = comment_perm_post_without_permission_access($comment['nid']) ? COMMENT_PUBLISHED : COMMENT_NOT_PUBLISHED;
+      if ($current_status != $desired_status) {
+        db_query("UPDATE {comments} SET status=%d WHERE cid=%d", $desired_status, $comment['cid']);
+        $comment['status'] = $desired_status;
       }
       break;
   }
@@ -108,15 +70,16 @@ function comment_perm_comment($a1, $op) {
 /**
  * Implementation of hook_form_alter().
  */
-function comment_perm_form_alter($form_id, &$form) {
+function comment_perm_form_alter(&$form, $form_state, $form_id) {
   if ($form_id == 'comment_form') {
     $nid = $form['nid']['#value'];
     if (!comment_perm_access($nid)) {
       // for comment reply pages, redirect back to the node
       if (arg(0) == 'comment' && arg(1) == 'reply' && is_numeric(arg(2))) {
         drupal_set_message(_comment_perm_access_denied_message(), 'error');
-        drupal_goto('node/' . arg(2));
-      } else {
+        drupal_goto('node/'. arg(2));
+      }
+      else {
         // for inline comment forms, such remove their fields so nothing will show
         unset($form['comment_filter']);
         foreach ($form as $key => $item) {
@@ -133,11 +96,18 @@ function comment_perm_form_alter($form_id, &$form) {
             }
           }
         }
-        
+
         // display a message to users who can't post comments
         $form['text'] = array(
-          '#value' => '<p id="comment-perm-access-denied">' . _comment_perm_access_denied_message() . '</p>'
+          '#value' => '<p id="comment-perm-access-denied">'. _comment_perm_access_denied_message() .'</p>'
         );
+      }
+    }
+
+    if (arg(0) == 'comment' && arg(1) == 'edit' && is_numeric(arg(2))) {
+      if (!comment_perm_edit_access($nid)) {
+        drupal_set_message(_comment_perm_access_denied_message(), 'error');
+        drupal_goto('node/'. $nid);
       }
     }
   }
@@ -146,9 +116,31 @@ function comment_perm_form_alter($form_id, &$form) {
 /**
  * Implementation of hook_link_alter().
  */
-function comment_perm_link_alter(&$node, &$links) {
+function comment_perm_link_alter(&$links, $node) {
   if (!comment_perm_access($node)) {
     unset($links['comment_add']);
+    if (module_exists('quote')) {
+      unset($links['quote']);
+    }
+
+    // hide comments links entirely if that setting is enabled
+    if (variable_get('comment_perm_hide_comments', 0)) {
+      unset($links['comment_comments']);
+      unset($links['comment_new_comments']);
+    }
+  }
+}
+
+/**
+ * Implementation of hook_nodeapi().
+ */
+function comment_perm_nodeapi(&$node, $op, $arg = 0) {
+  switch ($op) {
+    case 'alter':
+      if (variable_get('comment_perm_hide_comments', 0) && !comment_perm_access($node)) {
+        $node->comment = COMMENT_NODE_DISABLED;
+      }
+      break;
   }
 }
 
@@ -156,28 +148,161 @@ function comment_perm_link_alter(&$node, &$links) {
  * Can the current user add comments to a given node?
  */
 function comment_perm_access($node) {
+  global $user;
+
   if (is_numeric($node)) {
     $node = node_load($node);
   }
-  
+
   // get node types managed by comment_perm
-  $types = variable_get('comment_perm_node_types', '');
-  if (is_array($types)) {
-    if (in_array($node->type, $types)) {
-      if (!user_access('comment on ' . $node->type . ' content')) {
-        return false;
-      }
+  $types = variable_get('comment_perm_node_types', array());
+  if ($types[$node->type]) {
+    // allow comment administrators to post wherever they want
+    if (user_access('administer comments')) {
+      return TRUE;
     }
+
+    // get assigned permissions for this user's role
+    $access_moderated = user_access($node->type .': comment on any '. $node->type .' content');
+    $access_all = user_access($node->type .': comment without approval on any '. $node->type .' content');
+    $access_own = user_access($node->type .': comment without approval on own '. $node->type .' content');
+
+    // does the user have permission to post comment on nodes of this type?
+    if ($access_moderated || $access_all) {
+      return TRUE;
+    }
+
+    // does the user have permission to post comments on their own nodes?
+    if ($access_own && ($user->uid == $node->uid)) {
+      return TRUE;
+    }
+
+    // comment_perm controlled node types default to no permissions
+    return FALSE;
   }
-  return true;
+
+  // non-comment_perm controlled node types default to whatever permission Drupal gives them.
+  return TRUE;
+}
+
+/**
+ * Can the current user post comments without permission?
+ */
+function comment_perm_post_without_permission_access($node) {
+  global $user;
+
+  if (is_numeric($node)) {
+    $node = node_load($node);
+  }
+
+  // get node types managed by comment_perm
+  $types = variable_get('comment_perm_node_types', array());
+  if ($types[$node->type]) {
+
+    // allow comment administrators to edit any comment
+    if (user_access('administer comments')) {
+      return TRUE;
+    }
+
+    // get assigned permissions for this user's role
+    $access_all = user_access($node->type .': comment without approval on any '. $node->type .' content');
+    $access_own = user_access($node->type .': comment without approval on own '. $node->type .' content');
+
+    // does the user have permission to post comments without permission on nodes of this type?
+    if ($access_all) {
+      return TRUE;
+    }
+
+    // does the user have permission to post comments on their own nodes?
+    if ($access_own && ($user->uid == $node->uid)) {
+      return TRUE;
+    }
+
+    // get assigned permissions for this user's role
+    if (user_access($node->type .': edit own comments on '. $node->type .' content')) {
+      return TRUE;
+    }
+
+    // comment_perm controlled node types default to FALSE
+    return FALSE;
+  }
+
+  // non-comment_perm controlled node types default to whatever permission Drupal gives them.
+  return user_access('post comments without approval') ? TRUE : FALSE;
+}
+
+/**
+ * Can the current user edit comments?
+ */
+function comment_perm_edit_access($node) {
+  if (is_numeric($node)) {
+    $node = node_load($node);
+  }
+
+  // get node types managed by comment_perm
+  $types = variable_get('comment_perm_node_types', array());
+  if ($types[$node->type]) {
+
+    // allow comment administrators to edit any comment
+    if (user_access('administer comments')) {
+      return TRUE;
+    }
+
+    // get assigned permissions for this user's role
+    if (user_access($node->type .': edit own comments on '. $node->type .' content')) {
+      return TRUE;
+    }
+
+    // comment_perm controlled node types default to no permissions
+    return FALSE;
+  }
+
+  // non-comment_perm controlled node types default to whatever permission Drupal gives them.
+  return TRUE;
 }
 
 function _comment_perm_access_denied_message() {
   global $user;
-  
+
   if ($user->uid == 0) {
-    return variable_get('comment_perm_message_anon', 'Login or register to post comments!');
-  } else {
-    return variable_get('comment_perm_message_reg', "We're sorry, but you can't post comments here!");
+    return variable_get('comment_perm_message_anon', t('Login or register to post comments!'));
+  }
+  else {
+    return variable_get('comment_perm_message_reg', t("We're sorry, but you can't post comments here!"));
+  }
+}
+
+/**
+ * Process variables for comment.tpl.php.
+ *
+ * @see theme_comment()
+ */
+function comment_perm_preprocess_comment(&$variables) {
+  // remove edit link
+  if (isset($variables['links']) && !user_access('administer comments')) {
+    if (!comment_perm_edit_access($variables['node'])) {
+      $variables['links'] = preg_replace('|<li class="comment_edit.*?</li>|i', '', $variables['links']);
+    }
+    if (!comment_perm_access($variables['node'])) {
+      $variables['links'] = preg_replace('|<li class="comment_reply.*?</li>|i', '', $variables['links']);
+    }
+    if (strpos($variables['links'], '<li') === FALSE) {
+      $variables['links'] = '';
+    }
+  }
+}
+
+/**
+ * 'Post new comment' forms on the node page should be removed
+ * if a user doesn't have permission to post comments.
+ */
+function comment_perm_preprocess_box(&$variables) {
+  if (arg(0) == 'node' && is_numeric(arg(1))) {
+    if (!comment_perm_access(arg(1))) {
+      if ($variables['title'] == t('Post new comment')) {
+        unset($variables['title']);
+        unset($variables['content']);
+      }
+    }
   }
 }
