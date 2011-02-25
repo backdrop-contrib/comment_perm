@@ -1,4 +1,3 @@
-// $Id$
 
 The Comment Permissions module enables control of commenting by user role and 
 by node type.  Additional user permissions for selected node types are added 
