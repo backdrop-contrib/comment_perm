@@ -157,7 +157,7 @@ function comment_perm_access($node) {
 
   // get node types managed by comment_perm
   $types = variable_get('comment_perm_node_types', array());
-  if ($types[$node->type]) {
+  if (isset($types[$node->type])) {
     // allow comment administrators to post wherever they want
     if (user_access('administer comments')) {
       return TRUE;
