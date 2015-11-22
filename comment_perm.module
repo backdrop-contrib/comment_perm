@@ -35,6 +35,10 @@ function comment_perm_permission() {
   if (is_array($types)) {
     foreach ($types as $type) {
       if ($type) {
+        $perms[$type . ': administer comment settings on any ' . $type . ' content'] =
+          array('title' => t("%type: administer comment settings on any %type content", array('%type' => $type)));
+        $perms[$type . ': administer comment settings on own ' . $type . ' content'] =
+          array('title' => t("%type: administer comment settings on own %type content", array('%type' => $type)));
         $perms[$type . ': comment on any ' . $type . ' content'] =
           array ('title' => t("%type: comment on any %type content", array('%type' => $type)));
         $perms[$type . ': comment without approval on any ' . $type . ' content'] =
@@ -143,6 +147,13 @@ function comment_perm_form_alter(&$form, $form_state, $form_id) {
     }
   }
 
+  // Allow users to administer comment settings per content type.
+  if (!empty($form['#node_edit_form']) && isset($form['comment_settings'])) {
+    // Determine if user has access to administer comments.
+    if (comment_perm_administer_access($form['#node'])) {
+      $form['comment_settings']['#access'] = TRUE;
+    }
+  }
 }
 
 /**
@@ -272,3 +283,27 @@ function _comment_perm_access_denied_message($nid = null) {
   }
 }
 
+/**
+ * Control access for users with administer comments permissions.
+ */
+function comment_perm_administer_access($node) {
+  global $user;
+  $types = variable_get('comment_perm_node_types', array());
+
+  if (isset($types[$node->type])) {
+    $access_all = user_access($node->type . ': administer comment settings on any ' . $node->type . ' content');
+    $access_own = user_access($node->type . ': administer comment settings on own ' . $node->type . ' content');
+
+    // User has access to administer comments for current type of content.
+    if ($access_all) {
+      return TRUE;
+    }
+
+    // User has access to administer comments on own content.
+    if ($access_own && ($user->uid == $node->uid)) {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
