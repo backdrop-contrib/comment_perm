@@ -1,5 +1,4 @@
 <?php
-
 /**
  * @file
  * Module to control commenting permissions by role and by node type.
@@ -14,7 +13,7 @@ function comment_perm_menu() {
   $items['admin/config/system/comment_perm'] = array(
     'title' => 'Comment permissions',
     'description' => 'Setup comment permissions by user role and by node type.',
-    'page callback' => 'drupal_get_form',
+    'page callback' => 'backdrop_get_form',
     'page arguments' => array('comment_perm_admin_settings'),
     'access arguments' => array('administer site configuration'),
     'type' => MENU_NORMAL_ITEM,
@@ -131,15 +130,15 @@ function comment_perm_form_alter(&$form, $form_state, $form_id) {
           if (! comment_perm_access($nid)) {
             // for comment reply pages, redirect back to the node
             if (arg(0) == 'comment' && arg(1) == 'reply' && is_numeric(arg(2))) {
-              drupal_set_message(_comment_perm_access_denied_message($nid), 'error');
-              drupal_goto('node/' . arg(2));
+              backdrop_set_message(_comment_perm_access_denied_message($nid), 'error');
+              backdrop_goto('node/' . arg(2));
     }
   }
 
           if (arg(0) == 'comment' && arg(2) == 'edit' && is_numeric(arg(1))) {
             if (! comment_perm_edit_access($nid)) {
-              drupal_set_message(_comment_perm_access_denied_message($nid), 'error');
-              drupal_goto('node/' . $nid);
+              backdrop_set_message(_comment_perm_access_denied_message($nid), 'error');
+              backdrop_goto('node/' . $nid);
             }
           }
       }
